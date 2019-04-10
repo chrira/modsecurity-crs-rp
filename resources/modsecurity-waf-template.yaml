@@ -1,0 +1,289 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: modsecurity-waf
+objects:
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    labels:
+      app: modsecurity-waf
+    name: modsecurity-waf
+  spec:
+    lookupPolicy:
+      local: false
+    tags:
+    - annotations:
+        openshift.io/imported-from: ${WAF_DOCKER_IMAGE_NAME}:${WAF_DOCKER_IMAGE_TAG}
+      from:
+        kind: DockerImage
+        name: ${WAF_DOCKER_IMAGE_NAME}:${WAF_DOCKER_IMAGE_TAG}
+      name: ${WAF_DOCKER_IMAGE_TAG}
+      referencePolicy:
+        type: Source
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: modsecurity-waf
+    name: modsecurity-waf
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      app: modsecurity-waf
+      deploymentconfig: modsecurity-waf
+    strategy:
+      activeDeadlineSeconds: 21600
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: modsecurity-waf
+          deploymentconfig: modsecurity-waf
+      spec:
+        containers:
+        - env:
+          - name: BACKEND
+            value: "${BACKEND}"
+          - name: PORT
+            value: "${PORT}"
+          - name: PARANOIA
+            value: "${PARANOIA}"
+          - name: EXECUTING_PARANOIA
+            value: "${EXECUTING_PARANOIA}"
+          - name: ENFORCE_BODYPROC_URLENCODED
+            value: "${ENFORCE_BODYPROC_URLENCODED}"
+          - name: ANOMALYIN
+            value: "${ANOMALYIN}"
+          - name: ANOMALYOUT
+            value: "${ANOMALYOUT}"
+          - name: ALLOWED_METHODS
+            value: "${ALLOWED_METHODS}"
+          - name: ALLOWED_REQUEST_CONTENT_TYPE
+            value: "${ALLOWED_REQUEST_CONTENT_TYPE}"
+          - name: ALLOWED_REQUEST_CONTENT_TYPE_CHARSET
+            value: "${ALLOWED_REQUEST_CONTENT_TYPE_CHARSET}"
+          - name: ALLOWED_HTTP_VERSIONS
+            value: "${ALLOWED_HTTP_VERSIONS}"
+          - name: RESTRICTED_EXTENSIONS
+            value: "${RESTRICTED_EXTENSIONS}"
+          - name: RESTRICTED_HEADERS
+            value: "${RESTRICTED_HEADERS}"
+          - name: ALLOWED_HTTP_VERSIONS
+            value: "${ALLOWED_HTTP_VERSIONS}"
+          - name: STATIC_EXTENSIONS
+            value: "${STATIC_EXTENSIONS}"
+          - name: MAX_NUM_ARGS
+            value: "${MAX_NUM_ARGS}"
+          - name: ARG_NAME_LENGTH
+            value: "${ARG_NAME_LENGTH}"
+          - name: ARG_LENGTH
+            value: "${ARG_LENGTH}"
+          - name: MAX_FILE_SIZE
+            value: "${MAX_FILE_SIZE}"
+          - name: COMBINED_FILE_SIZES
+            value: "${COMBINED_FILE_SIZES}"
+          image: modsecurity-waf:${WAF_DOCKER_IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          name: modsecurity-waf
+          ports:
+          - containerPort: 8001
+            protocol: TCP
+          - containerPort: 8443
+            protocol: TCP
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /etc/apache2/conf
+            name: config-volume
+          - mountPath: /opt/certificates/app/
+            name: volume-cert
+            readOnly: true
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: httpd.conf
+          name: config-volume
+        - name: volume-cert
+          secret:
+            defaultMode: 420
+            secretName: certificate-waf
+    test: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - modsecurity-waf
+        from:
+          kind: ImageStreamTag
+          name: modsecurity-waf:${WAF_DOCKER_IMAGE_TAG}
+          namespace: pitc-cryptopus-prod
+      type: ImageChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: modsecurity-waf
+    name: ${WAF_SERVICE_NAME}
+  spec:
+    ports:
+    - name: 8443-tcp
+      port: 8443
+      protocol: TCP
+      targetPort: 8443
+    selector:
+      deploymentconfig: modsecurity-waf
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: Route
+  metadata:
+    labels:
+      app: modsecurity-waf
+    name: modsecurity-waf-secure
+  spec:
+    port:
+      targetPort: 8443-tcp
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: reencrypt
+    to:
+      kind: Service
+      name: ${WAF_SERVICE_NAME}
+      weight: 100
+    wildcardPolicy: None
+parameters:
+- description: WAF Docker image name (DockerHub Repo)
+  displayName: WAF Docker image name
+  name: WAF_DOCKER_IMAGE_NAME
+  required: true
+  value: "franbuehler/modsecurity-crs-rp"
+- description: WAF Docker image tag (DockerHub Repo)
+  displayName: WAF Docker image tag
+  name: WAF_DOCKER_IMAGE_TAG
+  required: true
+  value: "openshift"
+- description: WAF Pod service name
+  displayName: WAF service name
+  name: WAF_SERVICE_NAME
+  required: true
+  value: "modsecurity-waf-secure"
+- description: paranoia_level
+  displayName: paranoia_level
+  name: PARANOIA
+  required: true
+  value: "1"
+- description: executing_paranoia_level
+  displayName: executing_paranoia_level
+  name: EXECUTING_PARANOIA
+  required: true
+  value: "2"
+- description: enforce_bodyproc_urlencoded
+  displayName: enforce_bodyproc_urlencoded
+  name: ENFORCE_BODYPROC_URLENCODED
+  required: true
+  value: "1"
+- description: inbound_anomaly_score_threshold
+  displayName: inbound_anomaly_score_threshold
+  name: ANOMALYIN
+  required: true
+  value: "10"
+- description: outbound_anomaly_score_threshold
+  displayName: outbound_anomaly_score_threshold
+  name: ANOMALYOUT
+  required: true
+  value: "5"
+- description: allowed_methods
+  displayName: allowed_methods
+  name: ALLOWED_METHODS
+  required: true
+  value: "GET POST PUT"
+- description: allowed_request_content_type
+  displayName: allowed_request_content_type
+  name: ALLOWED_REQUEST_CONTENT_TYPE
+  required: true
+  value: "text/xml|application/xml|text/plain"
+- description: allowed_request_content_type_charset
+  displayName: allowed_request_content_type_charset
+  name: ALLOWED_REQUEST_CONTENT_TYPE_CHARSET
+  required: true
+  value: "utf-8|iso-8859-1"
+- description: allowed_http_versions
+  displayName: allowed_http_versions
+  name: ALLOWED_HTTP_VERSIONS
+  required: true
+  value: "HTTP/1.1 HTTP/2 HTTP/2.0"
+- description: restricted_extensions
+  displayName: restricted_extensions
+  name: RESTRICTED_EXTENSIONS
+  required: true
+  value: ".cmd/ .com/ .config/ .dll/"
+- description: restricted_headers
+  displayName: restricted_headers
+  name: RESTRICTED_HEADERS
+  required: true
+  value: "/proxy/ /if/"
+- description: static_extensions
+  displayName: static_extensions
+  name: STATIC_EXTENSIONS
+  required: true
+  value: "/.jpg/ /.jpeg/ /.png/ /.gif/"
+- description: max_num_args
+  displayName: max_num_args
+  name: MAX_NUM_ARGS
+  required: true
+  value: "128"
+- description: arg_name_length
+  displayName: arg_name_length
+  name: ARG_NAME_LENGTH
+  required: true
+  value: "50"
+- description: arg_length
+  displayName: arg_length
+  name: ARG_LENGTH
+  required: true
+  value: "200"
+- description: total_arg_length
+  displayName: total_arg_length
+  name: TOTAL_ARG_LENGTH
+  required: true
+  value: "6400"
+- description: max_file_size
+  displayName: max_file_size
+  name: MAX_FILE_SIZE
+  required: true
+  value: "100000"
+- description: combined_file_sizes
+  displayName: combined_file_sizes
+  name: COMBINED_FILE_SIZES
+  required: true
+  value: "1000000"
+- description: application backend
+  displayName: application backend
+  name: BACKEND
+  required: true
+- description: listening port of apache
+  displayName: listening port of apache
+  name: PORT
+  required: true
+  value: "8001"
